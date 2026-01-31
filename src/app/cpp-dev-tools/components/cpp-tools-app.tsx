@@ -628,7 +628,7 @@ Memory usage: 1.2 MB`)
             </p>
             <div className="flex items-center justify-center gap-4">
               <a
-                href="https://github.com/MohamedWael2025/cpp-dev-tools"
+                href="https://github.com/emigrators2025/cpp-dev-tools"
                 target="_blank"
                 rel="noopener noreferrer"
               >
