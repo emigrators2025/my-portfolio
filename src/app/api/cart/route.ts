@@ -1,19 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
 import { getSession } from '@/lib/auth'
 
+// In-memory cart storage for demo
+const cartStorage: Map<string, Array<{ productId: string; quantity: number }>> = new Map()
+
+// Mock product lookup
+const mockProducts: Record<string, { id: string; name: string; price: number; image: string; stock: number }> = {
+  '1': { id: '1', name: 'Wireless Bluetooth Headphones', price: 199.99, image: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400', stock: 50 },
+  '2': { id: '2', name: 'Smart Fitness Watch', price: 299.99, image: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=400', stock: 30 },
+  '3': { id: '3', name: 'Ergonomic Office Chair', price: 449.99, image: 'https://images.unsplash.com/photo-1592078615290-033ee584e267?w=400', stock: 15 },
+  '4': { id: '4', name: 'Portable Power Bank', price: 49.99, image: 'https://images.unsplash.com/photo-1609091839311-d5365f9ff1c5?w=400', stock: 100 },
+  '5': { id: '5', name: 'Mechanical Gaming Keyboard', price: 149.99, image: 'https://images.unsplash.com/photo-1511467687858-23d96c32e4ae?w=400', stock: 45 },
+  '6': { id: '6', name: 'Minimalist Desk Lamp', price: 79.99, image: 'https://images.unsplash.com/photo-1507473885765-e6ed057f782c?w=400', stock: 60 },
+}
+
 // GET user's cart
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
     const session = await getSession()
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const cartItems = await prisma.cartItem.findMany({
-      where: { userId: session.userId },
-      include: { product: true },
-    })
+    const userCart = cartStorage.get(session.userId) || []
+    const cartItems = userCart.map(item => ({
+      ...item,
+      product: mockProducts[item.productId] || null,
+    })).filter(item => item.product)
 
     return NextResponse.json(cartItems)
   } catch (error) {
@@ -37,40 +50,31 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Product ID required' }, { status: 400 })
     }
 
-    // Check if product exists
-    const product = await prisma.product.findUnique({
-      where: { id: productId },
-    })
-
+    const product = mockProducts[productId]
     if (!product) {
       return NextResponse.json({ error: 'Product not found' }, { status: 404 })
     }
 
-    // Check stock
     if (product.stock < quantity) {
       return NextResponse.json({ error: 'Insufficient stock' }, { status: 400 })
     }
 
-    // Upsert cart item
-    const cartItem = await prisma.cartItem.upsert({
-      where: {
-        userId_productId: {
-          userId: session.userId,
-          productId,
-        },
-      },
-      update: {
-        quantity: { increment: quantity },
-      },
-      create: {
-        userId: session.userId,
-        productId,
-        quantity,
-      },
-      include: { product: true },
-    })
+    let userCart = cartStorage.get(session.userId) || []
+    const existingItem = userCart.find(item => item.productId === productId)
 
-    return NextResponse.json(cartItem)
+    if (existingItem) {
+      existingItem.quantity += quantity
+    } else {
+      userCart.push({ productId, quantity })
+    }
+
+    cartStorage.set(session.userId, userCart)
+
+    return NextResponse.json({ 
+      productId, 
+      quantity: existingItem ? existingItem.quantity : quantity,
+      product 
+    })
   } catch (error) {
     console.error('Error adding to cart:', error)
     return NextResponse.json({ error: 'Failed to add to cart' }, { status: 500 })
@@ -92,31 +96,20 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
     }
 
+    let userCart = cartStorage.get(session.userId) || []
+
     if (quantity <= 0) {
-      // Remove item if quantity is 0 or less
-      await prisma.cartItem.delete({
-        where: {
-          userId_productId: {
-            userId: session.userId,
-            productId,
-          },
-        },
-      })
-      return NextResponse.json({ message: 'Item removed from cart' })
+      userCart = userCart.filter(item => item.productId !== productId)
+    } else {
+      const item = userCart.find(item => item.productId === productId)
+      if (item) {
+        item.quantity = quantity
+      }
     }
 
-    const cartItem = await prisma.cartItem.update({
-      where: {
-        userId_productId: {
-          userId: session.userId,
-          productId,
-        },
-      },
-      data: { quantity },
-      include: { product: true },
-    })
+    cartStorage.set(session.userId, userCart)
 
-    return NextResponse.json(cartItem)
+    return NextResponse.json({ success: true })
   } catch (error) {
     console.error('Error updating cart:', error)
     return NextResponse.json({ error: 'Failed to update cart' }, { status: 500 })
@@ -138,16 +131,11 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Product ID required' }, { status: 400 })
     }
 
-    await prisma.cartItem.delete({
-      where: {
-        userId_productId: {
-          userId: session.userId,
-          productId,
-        },
-      },
-    })
+    let userCart = cartStorage.get(session.userId) || []
+    userCart = userCart.filter(item => item.productId !== productId)
+    cartStorage.set(session.userId, userCart)
 
-    return NextResponse.json({ message: 'Item removed from cart' })
+    return NextResponse.json({ success: true })
   } catch (error) {
     console.error('Error removing from cart:', error)
     return NextResponse.json({ error: 'Failed to remove from cart' }, { status: 500 })

@@ -1,7 +1,5 @@
 import { SignJWT, jwtVerify } from 'jose'
 import { cookies } from 'next/headers'
-import bcrypt from 'bcryptjs'
-import { prisma } from './prisma'
 
 const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET || 'default-secret-change-in-production')
 
@@ -11,18 +9,6 @@ export interface JWTPayload {
   role: string
   iat: number
   exp: number
-}
-
-// ===================================================
-// PASSWORD HASHING
-// ===================================================
-
-export async function hashPassword(password: string): Promise<string> {
-  return bcrypt.hash(password, 12)
-}
-
-export async function verifyPassword(password: string, hashedPassword: string): Promise<boolean> {
-  return bcrypt.compare(password, hashedPassword)
 }
 
 // ===================================================
@@ -53,7 +39,7 @@ export async function verifyToken(token: string): Promise<JWTPayload | null> {
 // ===================================================
 
 export async function getSession(): Promise<JWTPayload | null> {
-  const cookieStore = cookies()
+  const cookieStore = await cookies()
   const token = cookieStore.get('auth-token')?.value
   
   if (!token) return null
@@ -62,7 +48,7 @@ export async function getSession(): Promise<JWTPayload | null> {
 }
 
 export async function setSession(token: string): Promise<void> {
-  const cookieStore = cookies()
+  const cookieStore = await cookies()
   cookieStore.set('auth-token', token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
@@ -73,8 +59,26 @@ export async function setSession(token: string): Promise<void> {
 }
 
 export async function clearSession(): Promise<void> {
-  const cookieStore = cookies()
+  const cookieStore = await cookies()
   cookieStore.delete('auth-token')
+}
+
+// ===================================================
+// MOCK USER STORAGE (Demo purposes - replace with real DB)
+// ===================================================
+
+// In-memory mock users for demo
+const mockUsers: Map<string, { id: string; name: string; email: string; password: string; role: string }> = new Map()
+
+// Simple hash function for demo (not secure - use bcrypt in production)
+function simpleHash(str: string): string {
+  let hash = 0
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i)
+    hash = ((hash << 5) - hash) + char
+    hash = hash & hash
+  }
+  return hash.toString(16)
 }
 
 // ===================================================
@@ -88,26 +92,27 @@ export async function signUp(
 ): Promise<{ success: boolean; error?: string; token?: string }> {
   try {
     // Check if user exists
-    const existingUser = await prisma.user.findUnique({ where: { email } })
-    if (existingUser) {
+    if (mockUsers.has(email)) {
       return { success: false, error: 'Email already registered' }
     }
 
-    // Hash password and create user
-    const hashedPassword = await hashPassword(password)
-    const user = await prisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashedPassword,
-      },
+    // Create user
+    const userId = `user_${Date.now()}`
+    const hashedPassword = simpleHash(password)
+    
+    mockUsers.set(email, {
+      id: userId,
+      name,
+      email,
+      password: hashedPassword,
+      role: 'USER',
     })
 
     // Create and return token
     const token = await createToken({
-      userId: user.id,
-      email: user.email,
-      role: user.role,
+      userId,
+      email,
+      role: 'USER',
     })
 
     await setSession(token)
@@ -124,15 +129,25 @@ export async function signIn(
   password: string
 ): Promise<{ success: boolean; error?: string; token?: string }> {
   try {
-    // Find user
-    const user = await prisma.user.findUnique({ where: { email } })
-    if (!user || !user.password) {
+    // Demo admin login
+    if (email === process.env.ADMIN_EMAIL && password === process.env.ADMIN_PASSWORD) {
+      const token = await createToken({
+        userId: 'admin_1',
+        email,
+        role: 'ADMIN',
+      })
+      await setSession(token)
+      return { success: true, token }
+    }
+
+    // Find user in mock storage
+    const user = mockUsers.get(email)
+    if (!user) {
       return { success: false, error: 'Invalid credentials' }
     }
 
     // Verify password
-    const isValid = await verifyPassword(password, user.password)
-    if (!isValid) {
+    if (simpleHash(password) !== user.password) {
       return { success: false, error: 'Invalid credentials' }
     }
 
@@ -187,17 +202,13 @@ export async function getCurrentUser() {
   const session = await getSession()
   if (!session) return null
 
-  const user = await prisma.user.findUnique({
-    where: { id: session.userId },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      image: true,
-      role: true,
-      createdAt: true,
-    },
-  })
-
-  return user
+  // Return mock user data
+  return {
+    id: session.userId,
+    name: session.email.split('@')[0],
+    email: session.email,
+    image: null,
+    role: session.role,
+    createdAt: new Date(),
+  }
 }
